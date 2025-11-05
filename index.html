@@ -1,0 +1,355 @@
+# FogoNFT Leaderboard — Full Project Scaffold (Next.js + Tailwind)
+
+This single file contains a complete, production-minded scaffold for a Leaderboard / Gamification Dashboard built with **Next.js (app dir compatible)**, **TailwindCSS**, and a lightweight mock backend (API routes). It is intended as a blueprint you can drop into a real repo and extend (Supabase/Postgres, real on-chain connectors, OAuth, and rate-limiting are recommended for production).
+
+---
+
+## README / Quick start
+
+1. Create a new Next.js app (if you want to use this scaffold manually):
+
+```bash
+npx create-next-app@latest fogo-leaderboard --typescript
+cd fogo-leaderboard
+# install packages
+npm install tailwindcss postcss autoprefixer @headlessui/react @heroicons/react ethers web3modal axios dayjs
+npx tailwindcss init -p
+```
+
+2. Replace files with the contents below.
+3. `npm run dev`
+
+---
+
+### File: package.json
+
+```json
+{
+  "name": "fogo-leaderboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "dayjs": "^1.11.8",
+    "ethers": "^6.6.0",
+    "next": "13.5.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "tailwindcss": "^3.4.7",
+    "web3modal": "^2.10.2"
+  }
+}
+```
+
+---
+
+### File: tailwind.config.js
+
+```js
+module.exports = {
+  content: [
+    './pages/**/*.{js,ts,jsx,tsx}',
+    './components/**/*.{js,ts,jsx,tsx}'
+  ],
+  theme: {
+    extend: {}
+  },
+  plugins: []
+}
+```
+
+---
+
+### File: postcss.config.js
+
+```js
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+}
+```
+
+---
+
+### File: styles/globals.css
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #__next { height: 100%; }
+body { @apply bg-gray-900 text-slate-100; }
+```
+
+---
+
+### File: pages/_app.js
+
+```jsx
+import '../styles/globals.css'
+export default function MyApp({ Component, pageProps }) {
+  return <Component {...pageProps} />
+}
+```
+
+---
+
+### File: lib/mock_db.js
+
+```js
+// Simple in-memory mock DB for MVP/demo. Replace with Supabase/Postgres in prod.
+let users = [
+  { wallet: '0xAb...123', name: 'Ash', avatar: null },
+  { wallet: '0xCd...456', name: 'Bina', avatar: null },
+  { wallet: '0xEf...789', name: 'Chet', avatar: null }
+]
+
+let activities = [
+  { id: 1, wallet: '0xAb...123', type: 'tweet', points: 8, proof: 'https://x.com/status/1', ts: Date.now() - 1000 * 60 * 60 },
+  { id: 2, wallet: '0xCd...456', type: 'trade', points: 35, proof: null, tx: '0xabc', ts: Date.now() - 1000 * 60 * 60 * 5 },
+  { id: 3, wallet: '0xEf...789', type: 'discord', points: 4, proof: null, ts: Date.now() - 1000 * 60 * 60 * 24 }
+]
+
+module.exports = {
+  users,
+  activities
+}
+```
+
+---
+
+### File: pages/api/leaderboard.js
+
+```js
+// API: GET /api/leaderboard -> returns aggregated leaderboard
+import { users, activities } from '../../lib/mock_db'
+
+export default function handler(req, res) {
+  // simple aggregation
+  const map = {}
+  activities.forEach((a) => {
+    if (!map[a.wallet]) map[a.wallet] = 0
+    map[a.wallet] += a.points
+  })
+
+  const rows = Object.keys(map).map((w) => {
+    const u = users.find((x) => x.wallet === w) || { wallet: w }
+    return { wallet: w, name: u.name || 'Anon', points: map[w] }
+  })
+  rows.sort((a, b) => b.points - a.points)
+  res.status(200).json({ ok: true, leaderboard: rows })
+}
+```
+
+---
+
+### File: pages/api/activities.js
+
+```js
+// API to accept new activities (webhook/admin) - in demo just push to memory
+import { activities } from '../../lib/mock_db'
+
+export default function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).end()
+  const { wallet, type, points, proof, tx } = req.body
+  const id = activities.length + 1
+  activities.push({ id, wallet, type, points, proof, tx, ts: Date.now() })
+  return res.status(201).json({ ok: true, id })
+}
+```
+
+---
+
+### File: components/Header.jsx
+
+```jsx
+export default function Header({ children }) {
+  return (
+    <header className="px-6 py-4 border-b border-slate-800 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900">
+      <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-red-500 flex items-center justify-center font-bold text-slate-900">🔥</div>
+          <div>
+            <div className="text-lg font-semibold">FogoNFT</div>
+            <div className="text-xs text-slate-400">Leaderboard • Mindshare Campaign</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">{children}</div>
+      </div>
+    </header>
+  )
+}
+```
+
+---
+
+### File: components/ConnectWallet.jsx
+
+```jsx
+import { useState } from 'react'
+import Web3Modal from 'web3modal'
+import { ethers } from 'ethers'
+
+export default function ConnectWallet({ onConnect }) {
+  const [addr, setAddr] = useState(null)
+
+  async function connect() {
+    try {
+      const modal = new Web3Modal({ cacheProvider: true })
+      const provider = await modal.connect()
+      const ethProvider = new ethers.BrowserProvider(provider)
+      const signer = await ethProvider.getSigner()
+      const address = await signer.getAddress()
+      setAddr(address)
+      onConnect && onConnect(address)
+    } catch (e) {
+      console.error(e)
+      alert('Failed to connect wallet')
+    }
+  }
+
+  return (
+    <div>
+      {addr ? (
+        <div className="text-sm bg-slate-800 px-3 py-1 rounded">{addr.slice(0,6)}...{addr.slice(-4)}</div>
+      ) : (
+        <button onClick={connect} className="px-4 py-2 rounded bg-amber-500 text-slate-900 font-semibold">Connect Wallet</button>
+      )}
+    </div>
+  )
+}
+```
+
+---
+
+### File: components/Leaderboard.jsx
+
+```jsx
+import useSWR from 'swr'
+import axios from 'axios'
+
+const fetcher = (url) => axios.get(url).then(r => r.data)
+
+export default function Leaderboard() {
+  const { data, error } = useSWR('/api/leaderboard', fetcher, { refreshInterval: 5000 })
+
+  if (error) return <div className="p-6">Failed to load</div>
+  if (!data) return <div className="p-6">Loading...</div>
+
+  return (
+    <div className="max-w-4xl mx-auto p-6">
+      <div className="bg-slate-800 rounded-lg p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold">Leaderboard</h2>
+          <div className="text-sm text-slate-400">Live • Updated</div>
+        </div>
+
+        <div className="divide-y divide-slate-700">
+          {data.leaderboard.map((row, idx) => (
+            <div key={row.wallet} className="py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg bg-slate-700 flex items-center justify-center font-bold">{idx+1}</div>
+                <div>
+                  <div className="font-medium">{row.name}</div>
+                  <div className="text-xs text-slate-400">{row.wallet}</div>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-lg font-semibold">{row.points} pts</div>
+                <div className="text-xs text-slate-400">Evidence · View</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### File: pages/index.js
+
+```jsx
+import Head from 'next/head'
+import Header from '../components/Header'
+import ConnectWallet from '../components/ConnectWallet'
+import Leaderboard from '../components/Leaderboard'
+import { useState } from 'react'
+
+export default function Home() {
+  const [user, setUser] = useState(null)
+  return (
+    <>
+      <Head>
+        <title>FogoNFT Leaderboard</title>
+      </Head>
+
+      <Header>
+        <ConnectWallet onConnect={(addr) => setUser(addr)} />
+      </Header>
+
+      <main className="py-8">
+        <section className="max-w-6xl mx-auto px-6">
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="md:col-span-2">
+              <div className="bg-gradient-to-br from-slate-800 to-slate-700 rounded-lg p-6 mb-6">
+                <h1 className="text-3xl font-bold mb-2">Join the Fogo Mindshare Campaign</h1>
+                <p className="text-slate-400">Connect your wallet, complete activities (tweet, discord, trade) and climb the leaderboard to win whitelist spots and drops.</p>
+              </div>
+
+              <Leaderboard />
+            </div>
+
+            <aside>
+              <div className="bg-slate-800 rounded-lg p-4">
+                <h3 className="font-semibold mb-2">How points work</h3>
+                <ul className="text-sm text-slate-400 list-disc pl-5 space-y-2">
+                  <li>Tweet with #FogoNFT — 8 pts</li>
+                  <li>Retweet official — 2 pts</li>
+                  <li>Valid trade (on-chain) — up to 50 pts</li>
+                  <li>Discord engagement — 1 pt per meaningful message</li>
+                </ul>
+              </div>
+
+              <div className="bg-slate-800 rounded-lg p-4 mt-4">
+                <h3 className="font-semibold mb-2">Claim / Rules</h3>
+                <p className="text-sm text-slate-400">Winners are chosen weekly. We verify on-chain evidence before issuing whitelist or NFTs. Do not share private keys.</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <footer className="py-6 text-center text-slate-400">© {new Date().getFullYear()} FogoNFT — Built for demo</footer>
+    </>
+  )
+}
+```
+
+---
+
+### Production Notes & Next Steps
+
+1. **Replace mock DB**: Use Supabase or Postgres. Move activities into a queue and perform server-side verification (check txs, tweet proof, discord webhook).
+2. **Anti-wash detection**: Implement heuristics (same wallet both sides, tiny repeated trades), require unique wallets to contribute to trade points. Consider Chainanalysis features if needed.
+3. **Auth / Privacy**: Use OAuth for Discord/Twitter but request minimal scopes. Never request private keys. Store minimal PII and provide data deletion endpoints.
+4. **Rate limiting & security**: Use Cloudflare or API gateway; protect admin endpoints with JWT and RBAC.
+5. **CI / Monitoring**: Deploy to Vercel; use Sentry; add GitHub Actions for lint/tests.
+
+---
+
+### Want me to output these files as downloadable zip or convert API to Supabase integration now?
+
+If yes, tell me: "Export repo" and I'll provide the next step.  
+
